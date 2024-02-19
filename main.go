@@ -6,16 +6,22 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"testing"
+
+	"database/sql"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 var albums []album
 
 type album struct {
-	Id     int    `json:"id"`
-	Artist string `json:"artist"`
-	Album  string `json:"album"`
+	Id     int     `json:"id"`
+	Artist string  `json:"artist"`
+	Album  string  `json:"album"`
+	Price  float32 `json:"price"`
 }
 
 func printAlbums() {
@@ -29,6 +35,43 @@ func printAlbums() {
 	}
 }
 
+func getConfigString() string {
+	return fmt.Sprintf("mysql://%s:%s@%s:%s/%s",
+		os.Getenv("DB_USER"),
+		os.Getenv("DB_PASSWORD"),
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_PORT"),
+		os.Getenv("DB_NAME"),
+	)
+}
+
+func insertIntoTable() {
+	db, err := sql.Open("mysql", "docker:docker@tcp(127.0.0.1:3308)/docker")
+
+	if err != nil {
+		panic(err.Error())
+	}
+
+	defer db.Close()
+	err = db.Ping()
+	if err != nil {
+		panic(err.Error())
+	}
+	stmt, err := db.Prepare("INSERT INTO Albums( Artist, Album, Price) VALUES (?, ?, ?)")
+
+	if err != nil {
+		panic(err.Error())
+	}
+	defer stmt.Close()
+	for _, album := range albums {
+		id := album.Id
+		fmt.Printf("Inserting album %d right now", id)
+		if _, err := stmt.Exec(album.Artist, album.Album, album.Price); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
 func defaultAlbums() {
 	// creates default album list
 	albums = append(
@@ -37,6 +80,7 @@ func defaultAlbums() {
 			Id:     1,
 			Artist: "Rick James",
 			Album:  "Rick Album 1",
+			Price:  11.06,
 		})
 	albums = append(
 		albums,
@@ -44,6 +88,7 @@ func defaultAlbums() {
 			Id:     2,
 			Artist: "James Rick",
 			Album:  "James Album 2",
+			Price:  12.57,
 		})
 	albums = append(
 		albums,
@@ -51,6 +96,7 @@ func defaultAlbums() {
 			Id:     3,
 			Artist: "Person Next",
 			Album:  "PND1",
+			Price:  13.87,
 		})
 }
 
@@ -123,9 +169,11 @@ func getAlbum(w http.ResponseWriter, req *http.Request) {
 
 func main() {
 	defaultAlbums()
+	insertIntoTable()
 	http.HandleFunc("/getAlbums", getAlbums)
 	http.HandleFunc("/addAlbum", addAlbum)
 	http.HandleFunc("/getAlbum", getAlbum)
+	fmt.Println("We have registered all handles")
 	log.Fatal(
 		http.ListenAndServe(":8080", nil))
 }
