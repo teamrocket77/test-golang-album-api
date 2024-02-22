@@ -8,14 +8,14 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"testing"
+	"time"
 
 	"database/sql"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
-var albums []album
+type wrappable func(http.ResponseWriter, *http.Request)
 
 type album struct {
 	Id     int     `json:"id"`
@@ -24,8 +24,7 @@ type album struct {
 	Price  float32 `json:"price"`
 }
 
-func printAlbums() {
-	// prints the albums in json format
+func printEncodedAlbums() {
 	for _, a := range albums {
 		j, err := json.Marshal(a)
 		if err != nil {
@@ -36,7 +35,8 @@ func printAlbums() {
 }
 
 func getConfigString() string {
-	return fmt.Sprintf("mysql://%s:%s@%s:%s/%s",
+	// fmt.Sprintf("docker:docker@tcp(127.0.0.1:3308)/docker",
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s",
 		os.Getenv("DB_USER"),
 		os.Getenv("DB_PASSWORD"),
 		os.Getenv("DB_HOST"),
@@ -46,7 +46,7 @@ func getConfigString() string {
 }
 
 func insertIntoTable() {
-	db, err := sql.Open("mysql", "docker:docker@tcp(127.0.0.1:3308)/docker")
+	db, err := sql.Open("mysql", getConfigString())
 
 	if err != nil {
 		panic(err.Error())
@@ -65,41 +65,35 @@ func insertIntoTable() {
 	defer stmt.Close()
 	for _, album := range albums {
 		id := album.Id
-		fmt.Printf("Inserting album %d right now", id)
+		fmt.Printf("Inserting album %d right now\n", id)
 		if _, err := stmt.Exec(album.Artist, album.Album, album.Price); err != nil {
 			log.Fatal(err)
 		}
 	}
 }
 
-func defaultAlbums() {
-	// creates default album list
-	albums = append(
-		albums,
-		album{
-			Id:     1,
-			Artist: "Rick James",
-			Album:  "Rick Album 1",
-			Price:  11.06,
-		})
-	albums = append(
-		albums,
-		album{
-			Id:     2,
-			Artist: "James Rick",
-			Album:  "James Album 2",
-			Price:  12.57,
-		})
-	albums = append(
-		albums,
-		album{
-			Id:     3,
-			Artist: "Person Next",
-			Album:  "PND1",
-			Price:  13.87,
-		})
+var albums = []album{
+	{
+		Id:     1,
+		Artist: "Rick James",
+		Album:  "Rick Album 1",
+		Price:  11.06,
+	},
+	{
+		Id:     2,
+		Artist: "James Rick",
+		Album:  "James Album 2",
+		Price:  12.57,
+	},
+	{
+		Id:     3,
+		Artist: "Person Next",
+		Album:  "PND1",
+		Price:  13.87,
+	},
 }
 
+// querying the base url and base line understanding
 func rootHandler(w http.ResponseWriter, req *http.Request) {
 	io.WriteString(w, "Recieved Request at / ")
 	switch httpMethod := req.Method; httpMethod {
@@ -114,12 +108,38 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func addAlbum(w http.ResponseWriter, req *http.Request) {
-	if req.Method != "POST" {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode("500 - Unsupported method for this endpoint")
-		return
+func addAlbumToDb(w http.ResponseWriter, req *http.Request) {
+	var album album
+	// albums = append(albums, album)
+	db, err := sql.Open("mysql", getConfigString())
+
+	if err != nil {
+		panic(err.Error())
 	}
+
+	defer db.Close()
+	err = db.Ping()
+	if err != nil {
+		panic(err.Error())
+	}
+	stmt, err := db.Prepare("INSERT INTO Albums( Artist, Album, Price) VALUES (?, ?, ?)")
+
+	if err != nil {
+		panic(err.Error())
+	}
+	defer stmt.Close()
+	decoder := json.NewDecoder(req.Body)
+	err = decoder.Decode(&album)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	stmt.Exec(album.Artist, album.Album, album.Price)
+	io.WriteString(w, "Upload Successful\n")
+
+}
+
+func addAlbum(w http.ResponseWriter, req *http.Request) {
 	var album album
 	decoder := json.NewDecoder(req.Body)
 	err := decoder.Decode(&album)
@@ -131,52 +151,63 @@ func addAlbum(w http.ResponseWriter, req *http.Request) {
 }
 
 func getAlbums(w http.ResponseWriter, req *http.Request) {
-	if req.Method != "GET" {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode("500 - Unsupported method for this endpoint")
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
-
-	io.WriteString(w, req.URL.RequestURI())
 
 	json.NewEncoder(w).Encode(albums)
 }
 
 func getAlbum(w http.ResponseWriter, req *http.Request) {
-	log.Printf("url: %s", req.URL)
-	if req.Method != "GET" {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode("500 - Unsupported method for this endpoint")
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	url := req.URL
 	str_value := url.Query().Get("id")
+
+	if str_value == "" {
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, "Invalid Query")
+		io.WriteString(w, "try something like URL:?id=<id_num>")
+		return
+	}
+
 	value, err := strconv.Atoi(str_value)
 
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, "Invalid Query")
 		panic(err)
 	}
+
 	for _, album := range albums {
 		if album.Id == value {
 			json.NewEncoder(w).Encode(album)
 			return
 		}
 	}
+	w.WriteHeader(http.StatusInternalServerError)
+	io.WriteString(w, "Invalid Query")
 	json.NewEncoder(w).Encode(fmt.Sprintf("Unable to find Album id %d", value))
 }
 
+func ApiLogger(fn wrappable) wrappable {
+	// same as the python wrapper we are creating a function that accepts the
+	//args and then we are returning that function with additional steps wrapped around it
+	return func(w http.ResponseWriter, req *http.Request) {
+		fmt.Println("Recieved request at: ", time.Now())
+		fmt.Println("Endpoint being serviced: ", req.URL)
+		fn(w, req)
+		fmt.Println("Done handling request at: ", time.Now())
+	}
+}
+
 func main() {
-	defaultAlbums()
-	insertIntoTable()
-	http.HandleFunc("/getAlbums", getAlbums)
-	http.HandleFunc("/addAlbum", addAlbum)
-	http.HandleFunc("/getAlbum", getAlbum)
+	// creating wrapped functions
+	getAlbumsWrapped := ApiLogger(getAlbums)
+	getAlbumWrapped := ApiLogger(getAlbum)
+	addAlbumDBWrapper := ApiLogger(addAlbumToDb)
+
+	http.HandleFunc("GET /getAlbums", getAlbumsWrapped)
+	http.HandleFunc("POST /addAlbum", addAlbumDBWrapper)
+	http.HandleFunc("GET /getAlbum", getAlbumWrapped)
 	fmt.Println("We have registered all handles")
 	log.Fatal(
 		http.ListenAndServe(":8080", nil))
-}
-
-func testgetAlbum(t *testing.T) {
 }
