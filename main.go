@@ -17,6 +17,10 @@ import (
 
 type wrappable func(http.ResponseWriter, *http.Request)
 
+type MiddleWare struct {
+	handler http.Handler
+}
+
 type album struct {
 	Id     int     `json:"id"`
 	Artist string  `json:"artist"`
@@ -198,8 +202,21 @@ func ApiLogger(fn wrappable) wrappable {
 	}
 }
 
+func NewLoggerMiddleware(handle http.Handler) *MiddleWare {
+	return &MiddleWare{handle}
+}
+
+func (m *MiddleWare) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("Recieved request at: ", time.Now())
+	fmt.Println("Endpoint being serviced: ", req.URL)
+	m.handler.ServeHTTP(w, req)
+	fmt.Println("Done handling request at: ", time.Now())
+
+}
+
 func main() {
 	// creating wrapped functions
+	// getAlbumsWrapped := NewLoggerMiddleware(http.HandlerFunc(getAlbums))
 	getAlbumsWrapped := ApiLogger(getAlbums)
 	getAlbumWrapped := ApiLogger(getAlbum)
 	addAlbumDBWrapper := ApiLogger(addAlbumToDb)
